@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.dependency-check/data
-          key: dependency-check-db-${{ runner.os }}-v4
+          key: dependency-check-db-${{ runner.os }}-v5
           restore-keys: |
             dependency-check-db-${{ runner.os }}-
 
@@ -34,35 +34,53 @@ jobs:
         run: |
           echo "⚙️ Configuring Dependency Check to use JSON feeds only (NO API)"
           mkdir -p ~/.dependency-check
-          # Отключаем NVD API, заставляем использовать только JSON feeds
           echo "data.nvd.validForHours=0" > ~/.dependency-check/dependency-check.properties
           echo "✅ Configuration: JSON feeds only, no API"
 
-      - name: Run Dependency Check (SCA)
+      - name: Update Database (Separate Step)
         continue-on-error: true
-        timeout-minutes: 90
+        timeout-minutes: 60
         run: |
-          echo "🔍 Starting Dependency Check scan..."
-          echo "Using JSON feeds only (NO NVD API)"
-          
-          mkdir -p reports
+          echo "🔄 Updating Dependency Check database (separate step)..."
           mkdir -p ~/.dependency-check/data
           
-          # Проверяем наличие базы данных
           DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
           
           if [ "$DB_FILES" -gt 50 ]; then
-            echo "✅ Using cached database ($DB_FILES files)"
-            USE_NOUPDATE="--noupdate"
+            echo "✅ Database already exists ($DB_FILES files), skipping update"
           else
-            echo "⚠️ No cached database found ($DB_FILES files)"
-            echo "Will update database using JSON feeds (NO API) - this may take 30-60 minutes"
-            USE_NOUPDATE=""
+            echo "⚠️ No database found ($DB_FILES files)"
+            echo "Updating database using JSON feeds (this will take 30-60 minutes)..."
+            
+            # Обновляем базу данных отдельным контейнером
+            docker run --rm \
+              -v "$HOME/.dependency-check/data:/data" \
+              -v "$HOME/.dependency-check/dependency-check.properties:/usr/share/dependency-check/conf/dependency-check.properties:ro" \
+              owasp/dependency-check:latest \
+              --updateonly \
+              --data /data || {
+                echo "⚠️ Database update had errors, but will continue"
+              }
+            
+            # Проверяем результат
+            NEW_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
+            if [ "$NEW_FILES" -gt 50 ]; then
+              echo "✅ Database updated successfully ($NEW_FILES files)"
+            else
+              echo "⚠️ Database update incomplete ($NEW_FILES files)"
+            fi
           fi
+
+      - name: Run Dependency Check Scan
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          echo "🔍 Starting Dependency Check scan..."
+          echo "Using cached or updated database with --noupdate"
           
-          # Используем Docker с правильной конфигурацией
-          # Важно: используем отдельный volume для базы данных, чтобы избежать блокировок
-          # Используем --data для указания пути к базе данных
+          mkdir -p reports
+          
+          # Всегда используем --noupdate, так как база уже обновлена или из кэша
           docker run --rm \
             -v "$PWD:/src" \
             -v "$PWD/reports:/report" \
@@ -75,17 +93,11 @@ jobs:
             --out /report \
             --project "DVWA" \
             --data /data \
-            $USE_NOUPDATE \
+            --noupdate \
             --enableExperimental \
             --failOnCVSS 11 || {
               echo "⚠️ Scan completed with warnings"
             }
-          
-          # Проверяем, обновилась ли база данных
-          NEW_DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
-          if [ "$NEW_DB_FILES" -gt 50 ]; then
-            echo "✅ Database is available ($NEW_DB_FILES files) - will be cached for next run"
-          fi
           
           echo "✅ Scan completed!"
 
