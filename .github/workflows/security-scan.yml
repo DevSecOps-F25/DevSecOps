@@ -104,9 +104,9 @@ jobs:
           
           echo "Starting Dependency Check scan..."
           echo "Note: Due to known issues with Dependency Check 9.0.9 and NVD API,"
-          echo "we will use --skipUpdate to work with existing database if update fails."
+          echo "we will use --noupdate to work with existing database if update fails."
           
-          # Since database update likely failed, use --skipUpdate to work with existing DB
+          # Since database update likely failed, use --noupdate to work with existing DB
           # This allows the tool to run and generate reports even if update doesn't work
           if [ -n "$NVD_API_KEY" ]; then
             echo "Running scan with API key (skipping update due to NVD API issues)..."
@@ -117,7 +117,7 @@ jobs:
               --format HTML \
               --out ./reports \
               --nvdApiKey "$NVD_API_KEY" \
-              --skipUpdate \
+              --noupdate \
               --enableExperimental \
               --failOnCVSS 11 || {
                 echo "Scan with API key failed, trying without API key"
@@ -127,7 +127,7 @@ jobs:
                   --format JSON \
                   --format HTML \
                   --out ./reports \
-                  --skipUpdate \
+                  --noupdate \
                   --enableExperimental \
                   --failOnCVSS 11 || true
               }
@@ -139,7 +139,7 @@ jobs:
               --format JSON \
               --format HTML \
               --out ./reports \
-              --skipUpdate \
+              --noupdate \
               --enableExperimental \
               --failOnCVSS 11 || true
           fi
