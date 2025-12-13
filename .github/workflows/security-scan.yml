@@ -24,29 +24,65 @@ jobs:
 
       - name: Run Dependency Check (SCA) with Docker
         continue-on-error: true
+        timeout-minutes: 60
         run: |
           echo "🔍 Starting Dependency Check scan using Docker..."
-          echo "Docker image includes pre-populated database, no API key needed!"
           
           mkdir -p reports
+          mkdir -p ~/.dependency-check/data
           
-          # Используем официальный Docker образ Dependency Check
-          # Образ уже содержит базу данных, не требует обновления
-          docker run --rm \
-            -v "$PWD:/src" \
-            -v "$PWD/reports:/report" \
-            -v "$HOME/.dependency-check/data:/usr/share/dependency-check/data" \
-            owasp/dependency-check:latest \
-            --scan /src/app \
-            --format HTML \
-            --format JSON \
-            --out /report \
-            --project "DVWA" \
-            --noupdate \
-            --enableExperimental \
-            --failOnCVSS 11 || {
-              echo "⚠️ Scan completed with warnings"
-            }
+          # Кэшируем базу данных между запусками
+          DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
+          
+          if [ "$DB_FILES" -gt 50 ]; then
+            echo "✅ Using cached database ($DB_FILES files)"
+            echo "Running scan with --noupdate"
+            docker run --rm \
+              -v "$PWD:/src" \
+              -v "$PWD/reports:/report" \
+              -v "$HOME/.dependency-check/data:/usr/share/dependency-check/data" \
+              owasp/dependency-check:latest \
+              --scan /src/app \
+              --format HTML \
+              --format JSON \
+              --out /report \
+              --project "DVWA" \
+              --noupdate \
+              --enableExperimental \
+              --failOnCVSS 11 || {
+                echo "⚠️ Scan completed with warnings"
+              }
+          else
+            echo "⚠️ No cached database found ($DB_FILES files)"
+            echo "Updating database first (this will take 30-60 minutes)..."
+            echo "Using JSON feeds (no API key needed)"
+            
+            # Сначала обновляем базу данных
+            docker run --rm \
+              -v "$HOME/.dependency-check/data:/usr/share/dependency-check/data" \
+              owasp/dependency-check:latest \
+              --updateonly || {
+                echo "⚠️ Database update had errors, but will continue"
+              }
+            
+            # Затем запускаем сканирование
+            echo "Running scan with updated database..."
+            docker run --rm \
+              -v "$PWD:/src" \
+              -v "$PWD/reports:/report" \
+              -v "$HOME/.dependency-check/data:/usr/share/dependency-check/data" \
+              owasp/dependency-check:latest \
+              --scan /src/app \
+              --format HTML \
+              --format JSON \
+              --out /report \
+              --project "DVWA" \
+              --noupdate \
+              --enableExperimental \
+              --failOnCVSS 11 || {
+                echo "⚠️ Scan completed with warnings"
+              }
+          fi
           
           echo "✅ Scan completed!"
 
