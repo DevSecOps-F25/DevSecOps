@@ -145,16 +145,39 @@ jobs:
           fi
           
           # Check if reports were generated
+          echo ""
+          echo "=== Checking for generated reports ==="
+          if [ -f reports/dependency-check-report.html ]; then
+            echo "✅ HTML report generated: reports/dependency-check-report.html"
+            ls -lh reports/dependency-check-report.html
+          fi
+          if [ -f reports/dependency-check-report.json ]; then
+            echo "✅ JSON report generated: reports/dependency-check-report.json"
+            ls -lh reports/dependency-check-report.json
+          fi
+          
           if [ -f reports/dependency-check-report.html ] || [ -f reports/dependency-check-report.json ]; then
-            echo "Reports generated successfully"
+            echo ""
+            echo "✅ SUCCESS: Dependency Check reports generated!"
+            echo "Reports will be uploaded as artifact 'security-reports'"
             ls -lh reports/
           else
-            echo "Warning: No reports generated"
+            echo ""
+            echo "⚠️ WARNING: No reports were generated"
+            echo "This may happen if:"
+            echo "  1. No dependencies were found in the project"
+            echo "  2. Database is empty (first run without update)"
+            echo "  3. Scan encountered an error"
+            echo ""
+            echo "Listing reports directory:"
+            ls -la reports/ || echo "Reports directory is empty"
           fi
 
       - name: Upload Reports Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: security-reports
           path: reports/
           retention-days: 30
+          if-no-files-found: warn
