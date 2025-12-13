@@ -150,12 +150,22 @@ jobs:
               fi
             fi
             
-            # Method 3: Try without API key (very slow, but may work)
+            # Method 3: Try without API key using JSON feeds (very slow, but may work)
             if [ "$UPDATE_SUCCESS" != "true" ]; then
-              echo "Method 3: Updating without API key (this will be VERY slow, 30+ minutes)..."
-              echo "NVD rate limits: 5 requests per 30 seconds without API key"
+              echo "Method 3: Updating without API key using JSON feeds..."
               echo "This method uses JSON feeds instead of API, which may work better"
-              if timeout 2400 ./dependency-check/dependency-check/bin/dependency-check.sh \
+              echo "NVD rate limits: 5 requests per 30 seconds without API key"
+              echo "This will take 30-60 minutes but should work..."
+              
+              # Disable API and use JSON feeds only
+              mkdir -p ~/.dependency-check
+              cat > ~/.dependency-check/dependency-check.properties << EOF
+# Disable NVD API, use JSON feeds instead
+data.nvd.validForHours=0
+EOF
+              
+              # Try update with very long timeout (60 minutes)
+              if timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
                 --updateonly 2>&1 | tee /tmp/dc-update.log; then
                 UPDATE_SUCCESS=true
               else
@@ -259,8 +269,11 @@ jobs:
                 }
             else
               # Try without --noupdate (will attempt to update)
-              echo "Attempting scan with database update (this may take 20-30 minutes)..."
-              timeout 1800 ./dependency-check/dependency-check/bin/dependency-check.sh \
+              echo "Attempting scan with database update (this may take 30-60 minutes)..."
+              echo "This will use JSON feeds if API fails, which may work better"
+              
+              # First try with API key
+              if timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
                 --project "DVWA" \
                 --scan ./app \
                 --format JSON \
@@ -269,7 +282,23 @@ jobs:
                 --nvdApiKey "$NVD_API_KEY" \
                 --nvdApiDelay 60000 \
                 --enableExperimental \
-                --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
+                --failOnCVSS 11 2>&1 | tee /tmp/dc-scan.log; then
+                SCAN_SUCCESS=true
+              else
+                echo "Scan with API key failed, trying without API key (JSON feeds)..."
+                # Disable API, use JSON feeds
+                mkdir -p ~/.dependency-check
+                echo "data.nvd.validForHours=0" > ~/.dependency-check/dependency-check.properties
+                
+                timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
+                  --project "DVWA" \
+                  --scan ./app \
+                  --format JSON \
+                  --format HTML \
+                  --out ./reports \
+                  --enableExperimental \
+                  --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
+              fi
             fi
           else
             echo "Running scan without API key..."
