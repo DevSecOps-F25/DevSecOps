@@ -22,6 +22,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Cache Dependency Check Database
+        uses: actions/cache@v3
+        with:
+          path: ~/.dependency-check/data
+          key: dependency-check-db-${{ runner.os }}-v1
+          restore-keys: |
+            dependency-check-db-${{ runner.os }}-
+
       - name: Run Dependency Check (SCA) with Docker
         continue-on-error: true
         timeout-minutes: 60
