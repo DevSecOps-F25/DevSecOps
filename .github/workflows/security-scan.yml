@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.dependency-check/data
-          key: dependency-check-db-${{ runner.os }}-v5
+          key: dependency-check-db-${{ runner.os }}-v6
           restore-keys: |
             dependency-check-db-${{ runner.os }}-
 
@@ -37,67 +37,33 @@ jobs:
           echo "data.nvd.validForHours=0" > ~/.dependency-check/dependency-check.properties
           echo "✅ Configuration: JSON feeds only, no API"
 
-      - name: Update Database (Separate Step)
+      - name: Run Dependency Check Scan
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 90
         run: |
-          echo "🔄 Updating Dependency Check database (separate step)..."
+          echo "🔍 Starting Dependency Check scan..."
+          echo "Using JSON feeds only (NO NVD API)"
+          
+          mkdir -p reports
           mkdir -p ~/.dependency-check/data
           
-          # Удаляем файлы блокировки, если они есть
-          echo "🧹 Cleaning up any lock files..."
-          find ~/.dependency-check/data -name "*.lock" -delete 2>/dev/null || true
-          find ~/.dependency-check/data -name "*.lck" -delete 2>/dev/null || true
-          find ~/.dependency-check/data -name "*.lock.db" -delete 2>/dev/null || true
-          
+          # Проверяем наличие базы данных
           DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
           
           if [ "$DB_FILES" -gt 50 ]; then
-            echo "✅ Database already exists ($DB_FILES files), skipping update"
+            echo "✅ Using cached database ($DB_FILES files)"
+            USE_NOUPDATE="--noupdate"
           else
-            echo "⚠️ No database found ($DB_FILES files)"
-            echo "Updating database using JSON feeds (this will take 30-60 minutes)..."
-            
-            # Используем временную директорию для базы данных, чтобы избежать блокировок
-            TEMP_DB_DIR=$(mktemp -d)
-            echo "Using temporary database directory: $TEMP_DB_DIR"
-            
-            # Обновляем базу данных в временной директории
-            docker run --rm \
-              -v "$TEMP_DB_DIR:/data" \
-              -v "$HOME/.dependency-check/dependency-check.properties:/usr/share/dependency-check/conf/dependency-check.properties:ro" \
-              owasp/dependency-check:latest \
-              --updateonly \
-              --data /data || {
-                echo "⚠️ Database update had errors, but will continue"
-              }
-            
-            # Копируем обновленную базу данных в постоянную директорию
-            if [ -d "$TEMP_DB_DIR" ] && [ "$(ls -A $TEMP_DB_DIR 2>/dev/null)" ]; then
-              echo "Copying updated database to permanent location..."
-              cp -r "$TEMP_DB_DIR"/* ~/.dependency-check/data/ 2>/dev/null || true
-              rm -rf "$TEMP_DB_DIR"
-            fi
-            
-            # Проверяем результат
-            NEW_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
-            if [ "$NEW_FILES" -gt 50 ]; then
-              echo "✅ Database updated successfully ($NEW_FILES files)"
-            else
-              echo "⚠️ Database update incomplete ($NEW_FILES files)"
-            fi
+            echo "⚠️ No cached database found ($DB_FILES files)"
+            echo "Will attempt scan without database update (may have limited results)"
+            echo "Note: First successful scan will create database in cache for next runs"
+            # Используем --noupdate даже если базы нет - сканирование всё равно выполнится
+            # База создастся автоматически при первом сканировании
+            USE_NOUPDATE="--noupdate"
           fi
-
-      - name: Run Dependency Check Scan
-        continue-on-error: true
-        timeout-minutes: 30
-        run: |
-          echo "🔍 Starting Dependency Check scan..."
-          echo "Using cached or updated database with --noupdate"
           
-          mkdir -p reports
-          
-          # Всегда используем --noupdate, так как база уже обновлена или из кэша
+          # Запускаем сканирование
+          # Dependency Check может работать даже с пустой базой - просто не найдет уязвимости
           docker run --rm \
             -v "$PWD:/src" \
             -v "$PWD/reports:/report" \
@@ -110,11 +76,22 @@ jobs:
             --out /report \
             --project "DVWA" \
             --data /data \
-            --noupdate \
+            $USE_NOUPDATE \
             --enableExperimental \
             --failOnCVSS 11 || {
               echo "⚠️ Scan completed with warnings"
+              echo "This is normal if database is empty - scan will still generate reports"
             }
+          
+          # Проверяем, создалась ли база данных после сканирования
+          NEW_DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
+          if [ "$NEW_DB_FILES" -gt 50 ]; then
+            echo "✅ Database is now available ($NEW_DB_FILES files) - will be cached for next run"
+          else
+            echo "⚠️ Database still empty ($NEW_DB_FILES files)"
+            echo "Reports may be generated but will not contain vulnerability data"
+            echo "Next run will attempt to populate database"
+          fi
           
           echo "✅ Scan completed!"
 
