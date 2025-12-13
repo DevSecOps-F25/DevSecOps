@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: "composer"
+    directory: "/app/vulnerabilities/api"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+      - "dependabot"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    allow:
+      - dependency-type: "all"
