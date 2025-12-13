@@ -75,6 +75,56 @@ EOF
           retention-days: 30
           if-no-files-found: warn
 
+  dependabot-check:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check Dependabot Security Alerts
+        run: |
+          echo "📊 Checking Dependabot Security Alerts..."
+          echo "View alerts at: https://github.com/${{ github.repository }}/security/dependabot"
+          echo ""
+          
+          # Устанавливаем GitHub CLI
+          if ! command -v gh &> /dev/null; then
+            echo "Installing GitHub CLI..."
+            type -p curl >/dev/null || (apt-get update && apt-get install curl -y)
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            apt-get update
+            apt-get install gh -y
+          fi
+          
+          # Авторизуемся (используем GITHUB_TOKEN)
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+          
+          # Получаем список Dependabot alerts
+          echo "Fetching Dependabot alerts..."
+          ALERTS_COUNT=$(gh api repos/${{ github.repository }}/dependabot/alerts --jq 'length' 2>/dev/null || echo "0")
+          
+          if [ "$ALERTS_COUNT" = "0" ] || [ -z "$ALERTS_COUNT" ]; then
+            echo "✅ No Dependabot alerts found"
+            echo "This means either:"
+            echo "  1. No vulnerabilities found in dependencies"
+            echo "  2. Dependabot hasn't scanned yet (wait 5-10 minutes after creating dependabot.yml)"
+          else
+            echo "⚠️ Found $ALERTS_COUNT Dependabot security alert(s)"
+            echo ""
+            echo "Top 5 alerts:"
+            gh api repos/${{ github.repository }}/dependabot/alerts --jq '.[] | select(.state=="open") | "  - \(.dependency.package.name)@\(.dependency.manifest_path): \(.security_advisory.summary)"' 2>/dev/null | head -5 || echo "  (Unable to fetch details - check GitHub Security tab)"
+            echo ""
+            echo "📋 View all alerts: https://github.com/${{ github.repository }}/security/dependabot"
+          fi
+          
+          echo ""
+          echo "✅ Dependabot check completed!"
+
   dependency-check:
     runs-on: ubuntu-latest
     continue-on-error: true

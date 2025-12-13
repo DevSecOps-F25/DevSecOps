@@ -2,14 +2,12 @@ version: 2
 updates:
   # PHP (Composer) - для DVWA проекта
   - package-ecosystem: "composer"
-    directory: "/app"
+    directory: "/app/vulnerabilities/api"
     schedule:
       interval: "weekly"
       day: "monday"
       time: "09:00"
     open-pull-requests-limit: 10
-    reviewers:
-      - "DevSecOps-F25"
     labels:
       - "dependencies"
       - "security"
@@ -17,19 +15,7 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
-
-  # JavaScript (npm/yarn) - если используется в проекте
-  - package-ecosystem: "npm"
-    directory: "/app"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "DevSecOps-F25"
-    labels:
-      - "dependencies"
-      - "security"
-      - "dependabot"
+    # Автоматически обновлять зависимости с уязвимостями
+    allow:
+      - dependency-type: "all"
 
