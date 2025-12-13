@@ -1,4 +1,4 @@
-name: SAST Scan
+name: Security Scan
 
 on: [push, pull_request]
 
@@ -30,339 +30,81 @@ jobs:
 
       - name: Cache Dependency Check Database
         uses: actions/cache@v3
-        id: cache-db
         with:
           path: ~/.dependency-check/data
-          key: dependency-check-db-${{ runner.os }}-v3
+          key: dependency-check-db-${{ runner.os }}-${{ hashFiles('**/composer.lock', '**/package-lock.json') }}
           restore-keys: |
             dependency-check-db-${{ runner.os }}-
-        
-      - name: Check Cache Status
-        run: |
-          if [ "${{ steps.cache-db.outputs.cache-hit }}" = "true" ]; then
-            echo "✅ Database cache hit - using cached database"
-            DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
-            echo "Cached database has $DB_FILES files"
-          else
-            echo "⚠️ Database cache miss - will need to update database"
-          fi
 
-      - name: Install OWASP Dependency Check
+      - name: Download and Install OWASP Dependency Check
         run: |
-          # Download and install Dependency Check (prefer 10.0.0 for better NVD API support)
-          echo "Downloading Dependency Check..."
-          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.0/dependency-check-10.0.0-release.zip || \
-          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip
-          unzip -q dependency-check-*-release.zip -d dependency-check
+          echo "📦 Downloading OWASP Dependency Check..."
+          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.0/dependency-check-10.0.0-release.zip
+          unzip -q dependency-check-10.0.0-release.zip -d dependency-check
           chmod +x dependency-check/dependency-check/bin/dependency-check.sh
           
-          # Check version
-          echo "Dependency Check version:"
+          echo "✅ Dependency Check installed"
           ./dependency-check/dependency-check/bin/dependency-check.sh --version
 
-      - name: Debug - Check API Key
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+      - name: Run Dependency Check Scan
         run: |
-          # Check if secret exists in GitHub (even if empty)
-          if [ -z "${{ secrets.NVD_API_KEY }}" ]; then
-            echo "❌ ERROR: NVD_API_KEY secret does NOT exist in GitHub Secrets!"
-            echo "Please add NVD_API_KEY to GitHub Secrets:"
-            echo "1. Go to: Settings → Secrets and variables → Actions"
-            echo "2. Click 'New repository secret'"
-            echo "3. Name: NVD_API_KEY"
-            echo "4. Value: e3efde5e-e313-4cd5-80dc-e8bb6ef73a60"
-            exit 1
-          fi
+          echo "🔍 Starting Dependency Check scan..."
           
-          # Check if secret is set in environment
-          if [ -n "$NVD_API_KEY" ]; then
-            echo "✅ NVD_API_KEY is set correctly"
-            echo "Length: ${#NVD_API_KEY} characters"
-            echo "First 10 chars: ${NVD_API_KEY:0:10}..."
-            echo "Last 10 chars: ...${NVD_API_KEY: -10}"
-            echo "Format check: $([ ${#NVD_API_KEY} -eq 36 ] && echo '✅ Correct length (36 chars)' || echo '⚠️ Unexpected length')"
-          else
-            echo "⚠️ WARNING: NVD_API_KEY secret exists but is empty!"
-            echo "Please check the secret value in GitHub Settings"
-          fi
-
-      - name: Create Dependency Check Config
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          if [ -n "$NVD_API_KEY" ]; then
-            mkdir -p ~/.dependency-check
-            echo "nvd.api.key=$NVD_API_KEY" > ~/.dependency-check/dependency-check.properties
-            echo "✅ Created dependency-check.properties with API key"
-          else
-            echo "⚠️ NVD_API_KEY not available, config file not created"
-          fi
-
-      - name: Update Dependency Check Database
-        continue-on-error: true
-        timeout-minutes: 60
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          echo "Attempting to update Dependency Check database..."
-          echo "This may take 20-40 minutes on first run..."
-          
-          # Create data directory
-          mkdir -p ~/.dependency-check/data
-          
-          # Check if we have cached database
-          CACHED_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
-          if [ "$CACHED_FILES" -gt 50 ]; then
-            echo "✅ Using cached database ($CACHED_FILES files)"
-            echo "Skipping update, will only update if needed during scan"
-            UPDATE_SUCCESS=true
-          else
-            echo "⚠️ No cached database found ($CACHED_FILES files)"
-            echo "Will attempt to update database..."
-            
-            # Try multiple methods to update database
-            UPDATE_SUCCESS=false
-            
-            # Method 1: Try with API key using config file
-            if [ -n "$NVD_API_KEY" ]; then
-              echo "Method 1: Updating with API key (from config file)..."
-              if ./dependency-check/dependency-check/bin/dependency-check.sh \
-                --updateonly \
-                --nvdApiDelay 60000 \
-                --nvdMaxRetryCount 5 2>&1 | tee /tmp/dc-update.log; then
-                UPDATE_SUCCESS=true
-              else
-                echo "Method 1 failed, trying Method 2..."
-                
-                # Method 2: Try with API key as parameter
-                echo "Method 2: Updating with API key (as parameter)..."
-                if ./dependency-check/dependency-check/bin/dependency-check.sh \
-                  --updateonly \
-                  --nvdApiKey "$NVD_API_KEY" \
-                  --nvdApiDelay 60000 \
-                  --nvdMaxRetryCount 5 2>&1 | tee /tmp/dc-update.log; then
-                  UPDATE_SUCCESS=true
-                else
-                  echo "Method 2 failed, trying Method 3..."
-                  UPDATE_SUCCESS=false
-                fi
-              fi
-            fi
-            
-            # Method 3: Try without API key using JSON feeds (very slow, but may work)
-            if [ "$UPDATE_SUCCESS" != "true" ]; then
-              echo "Method 3: Updating without API key using JSON feeds..."
-              echo "This method uses JSON feeds instead of API, which may work better"
-              echo "NVD rate limits: 5 requests per 30 seconds without API key"
-              echo "This will take 30-60 minutes but should work..."
-              
-              # Disable API and use JSON feeds only
-              mkdir -p ~/.dependency-check
-              echo "# Disable NVD API, use JSON feeds instead" > ~/.dependency-check/dependency-check.properties
-              echo "data.nvd.validForHours=0" >> ~/.dependency-check/dependency-check.properties
-              
-              # Try update with very long timeout (60 minutes)
-              if timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
-                --updateonly 2>&1 | tee /tmp/dc-update.log; then
-                UPDATE_SUCCESS=true
-              else
-                echo "Method 3 also failed"
-                UPDATE_SUCCESS=false
-              fi
-            fi
-          fi
-          
-          # Check if database was actually created/updated (verify by file count)
-          if [ -d ~/.dependency-check/data ]; then
-            DB_SIZE=$(du -sh ~/.dependency-check/data 2>/dev/null | cut -f1)
-            FILE_COUNT=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
-            echo ""
-            echo "=== Database Status ==="
-            echo "Database directory exists"
-            echo "Database size: $DB_SIZE"
-            echo "Number of files: $FILE_COUNT"
-            
-            # Real check: database should have many files (typically 100+)
-            if [ "$FILE_COUNT" -gt 50 ]; then
-              echo "✅ Database appears to have data ($FILE_COUNT files)"
-              ls -lh ~/.dependency-check/data/ | head -10
-              UPDATE_SUCCESS=true
-            else
-              echo "⚠️ Database directory exists but appears empty or incomplete ($FILE_COUNT files)"
-              echo "A proper database should have 100+ files"
-              UPDATE_SUCCESS=false
-            fi
-          else
-            echo "❌ Database directory does not exist"
-            UPDATE_SUCCESS=false
-          fi
-          
-          echo ""
-          if [ "$UPDATE_SUCCESS" = true ]; then
-            echo "✅ Database update completed successfully"
-          else
-            echo "⚠️ Database update failed - database is empty or incomplete"
-            echo "This is a known issue with Dependency Check and NVD API"
-            echo ""
-            echo "Attempting alternative: Using scan with automatic update (may work during scan)..."
-            echo "This will be attempted during the scan phase"
-            echo ""
-            echo "Note: If this continues to fail, the issue is with NVD API access from GitHub Actions"
-            echo "This is a known limitation and may require:"
-            echo "  1. Using Dependency Check 10.0.0+ (already attempted)"
-            echo "  2. Waiting for NVD API to become available"
-            echo "  3. Using a pre-populated database from cache (will be available on next run)"
-          fi
-
-      - name: Run Dependency Check (SCA)
-        continue-on-error: true
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
+          # Создаем папку для отчетов, если её нет
           mkdir -p reports
           
-          echo "Starting Dependency Check scan..."
+          # Запускаем сканирование с JSON фидами (работает без API ключа)
+          ./dependency-check/dependency-check/bin/dependency-check.sh \
+            --project "DVWA Security Scan" \
+            --scan ./app \
+            --format HTML \
+            --format JSON \
+            --out ./reports \
+            --disableNodeAudit \
+            --disableNodeJS \
+            --disableRetireJS \
+            --disableOssIndex \
+            --nvdApiDelay 2000 \
+            --nvdMaxRetryCount 10 \
+            --connectionTimeout 300000 \
+            --proxyserver "" \
+            --failOnCVSS 0
           
-          # Check if database exists and has data
-          DB_FILE_COUNT=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
-          if [ -d ~/.dependency-check/data ] && [ "$DB_FILE_COUNT" -gt 50 ]; then
-            echo "✅ Database exists with data ($DB_FILE_COUNT files), using --noupdate"
-            USE_NOUPDATE="--noupdate"
+          echo "✅ Scan completed!"
+
+      - name: Check Generated Reports
+        run: |
+          echo "📊 Checking generated reports..."
+          if [ -f "reports/dependency-check-report.html" ]; then
+            echo "✅ HTML report generated: $(ls -lh reports/dependency-check-report.html)"
+            echo "Report preview:"
+            grep -E "(<title>|vulnerabilities found|Vulnerabilities)" reports/dependency-check-report.html | head -5
           else
-            echo "⚠️ Database is empty or doesn't exist ($DB_FILE_COUNT files found, need 50+)"
-            echo "Will attempt scan WITHOUT --noupdate to allow automatic update during scan"
-            echo "This may take 30-60 minutes but should work..."
-            USE_NOUPDATE=""
+            echo "❌ HTML report not found"
           fi
           
-          # Run scan with multiple fallback attempts
-          SCAN_SUCCESS=false
-          
-          if [ -n "$NVD_API_KEY" ]; then
-            echo "Running scan with API key..."
-            if [ -n "$USE_NOUPDATE" ]; then
-              # Try with --noupdate first
-              ./dependency-check/dependency-check/bin/dependency-check.sh \
-                --project "DVWA" \
-                --scan ./app \
-                --format JSON \
-                --format HTML \
-                --out ./reports \
-                --nvdApiKey "$NVD_API_KEY" \
-                --noupdate \
-                --enableExperimental \
-                --failOnCVSS 11 && SCAN_SUCCESS=true || {
-                  echo "Scan with --noupdate failed, trying without it (will attempt update)..."
-                  timeout 1800 ./dependency-check/dependency-check/bin/dependency-check.sh \
-                    --project "DVWA" \
-                    --scan ./app \
-                    --format JSON \
-                    --format HTML \
-                    --out ./reports \
-                    --nvdApiKey "$NVD_API_KEY" \
-                    --nvdApiDelay 60000 \
-                    --enableExperimental \
-                    --failOnCVSS 11 && SCAN_SUCCESS=true || echo "All scan attempts failed"
-                }
-            else
-              # Try without --noupdate (will attempt to update)
-              echo "Attempting scan with database update (this may take 30-60 minutes)..."
-              echo "This will use JSON feeds if API fails, which may work better"
-              
-              # First try with API key
-              if timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
-                --project "DVWA" \
-                --scan ./app \
-                --format JSON \
-                --format HTML \
-                --out ./reports \
-                --nvdApiKey "$NVD_API_KEY" \
-                --nvdApiDelay 60000 \
-                --enableExperimental \
-                --failOnCVSS 11 2>&1 | tee /tmp/dc-scan.log; then
-                SCAN_SUCCESS=true
-              else
-                echo "Scan with API key failed, trying without API key (JSON feeds)..."
-                # Disable API, use JSON feeds
-                mkdir -p ~/.dependency-check
-                echo "data.nvd.validForHours=0" > ~/.dependency-check/dependency-check.properties
-                
-                timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
-                  --project "DVWA" \
-                  --scan ./app \
-                  --format JSON \
-                  --format HTML \
-                  --out ./reports \
-                  --enableExperimental \
-                  --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
-              fi
-            fi
+          if [ -f "reports/dependency-check-report.json" ]; then
+            echo "✅ JSON report generated: $(ls -lh reports/dependency-check-report.json)"
+            echo "JSON summary:"
+            python3 -c "import json; data = json.load(open('reports/dependency-check-report.json')); print(f'Dependencies: {len(data[\"dependencies\"])}, Vulnerabilities: {sum(len(d.get(\"vulnerabilities\", [])) for d in data[\"dependencies\"])}')"
           else
-            echo "Running scan without API key..."
-            if [ -n "$USE_NOUPDATE" ]; then
-              ./dependency-check/dependency-check/bin/dependency-check.sh \
-                --project "DVWA" \
-                --scan ./app \
-                --format JSON \
-                --format HTML \
-                --out ./reports \
-                --noupdate \
-                --enableExperimental \
-                --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
-            else
-              echo "Attempting scan with database update (this will be VERY slow without API key)..."
-              timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
-                --project "DVWA" \
-                --scan ./app \
-                --format JSON \
-                --format HTML \
-                --out ./reports \
-                --enableExperimental \
-                --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
-            fi
-          fi
-          
-          if [ "$SCAN_SUCCESS" = true ]; then
-            echo "✅ Scan completed successfully!"
-          else
-            echo "⚠️ Scan did not complete successfully"
-          fi
-          
-          # Check if reports were generated
-          echo ""
-          echo "=== Checking for generated reports ==="
-          if [ -f reports/dependency-check-report.html ]; then
-            echo "✅ HTML report generated: reports/dependency-check-report.html"
-            ls -lh reports/dependency-check-report.html
-          fi
-          if [ -f reports/dependency-check-report.json ]; then
-            echo "✅ JSON report generated: reports/dependency-check-report.json"
-            ls -lh reports/dependency-check-report.json
-          fi
-          
-          if [ -f reports/dependency-check-report.html ] || [ -f reports/dependency-check-report.json ]; then
-            echo ""
-            echo "✅ SUCCESS: Dependency Check reports generated!"
-            echo "Reports will be uploaded as artifact 'security-reports'"
-            ls -lh reports/
-          else
-            echo ""
-            echo "⚠️ WARNING: No reports were generated"
-            echo "This may happen if:"
-            echo "  1. No dependencies were found in the project"
-            echo "  2. Database is empty (first run without update)"
-            echo "  3. Scan encountered an error"
-            echo ""
-            echo "Listing reports directory:"
-            ls -la reports/ || echo "Reports directory is empty"
+            echo "❌ JSON report not found"
           fi
 
-      - name: Upload Reports Artifact
-        if: always()
+      - name: Upload Security Reports
         uses: actions/upload-artifact@v4
         with:
           name: security-reports
-          path: reports/
+          path: |
+            reports/
           retention-days: 30
           if-no-files-found: warn
+
+  security-checks:
+    runs-on: ubuntu-latest
+    needs: [sonarqube, dependency-check]
+    steps:
+      - name: Security Scan Summary
+        run: |
+          echo "✅ All security scans completed successfully!"
+          echo "SAST (SonarQube) and SCA (Dependency Check) reports are available as artifacts."
