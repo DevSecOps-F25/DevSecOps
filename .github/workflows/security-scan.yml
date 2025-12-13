@@ -28,15 +28,25 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Cache Dependency Check Database
+        uses: actions/cache@v3
+        with:
+          path: ~/.dependency-check/data
+          key: dependency-check-db-${{ runner.os }}-v2
+          restore-keys: |
+            dependency-check-db-${{ runner.os }}-
+
       - name: Install OWASP Dependency Check
         run: |
-          # Download and install Dependency Check
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.0/dependency-check-10.0.0-release.zip || \
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip
-          unzip dependency-check-*-release.zip -d dependency-check
+          # Download and install Dependency Check (prefer 10.0.0 for better NVD API support)
+          echo "Downloading Dependency Check..."
+          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.0/dependency-check-10.0.0-release.zip || \
+          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip
+          unzip -q dependency-check-*-release.zip -d dependency-check
           chmod +x dependency-check/dependency-check/bin/dependency-check.sh
           
           # Check version
+          echo "Dependency Check version:"
           ./dependency-check/dependency-check/bin/dependency-check.sh --version
 
       - name: Debug - Check API Key
