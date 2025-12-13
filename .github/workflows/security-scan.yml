@@ -31,13 +31,30 @@ jobs:
           chmod +x dependency-check/dependency-check/bin/dependency-check.sh
 
       - name: Debug - Check API Key
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          if [ -n "${{ secrets.NVD_API_KEY }}" ]; then
-            echo "NVD_API_KEY is set (length: ${#NVD_API_KEY})"
+          # Check if secret exists in GitHub (even if empty)
+          if [ -z "${{ secrets.NVD_API_KEY }}" ]; then
+            echo "❌ ERROR: NVD_API_KEY secret does NOT exist in GitHub Secrets!"
+            echo "Please add NVD_API_KEY to GitHub Secrets:"
+            echo "1. Go to: Settings → Secrets and variables → Actions"
+            echo "2. Click 'New repository secret'"
+            echo "3. Name: NVD_API_KEY"
+            echo "4. Value: e3efde5e-e313-4cd5-80dc-e8bb6ef73a60"
+            exit 1
+          fi
+          
+          # Check if secret is set in environment
+          if [ -n "$NVD_API_KEY" ]; then
+            echo "✅ NVD_API_KEY is set correctly"
+            echo "Length: ${#NVD_API_KEY} characters"
             echo "First 10 chars: ${NVD_API_KEY:0:10}..."
+            echo "Last 10 chars: ...${NVD_API_KEY: -10}"
+            echo "Format check: $([ ${#NVD_API_KEY} -eq 36 ] && echo '✅ Correct length (36 chars)' || echo '⚠️ Unexpected length')"
           else
-            echo "ERROR: NVD_API_KEY secret is NOT set!"
-            echo "Please add NVD_API_KEY to GitHub Secrets"
+            echo "⚠️ WARNING: NVD_API_KEY secret exists but is empty!"
+            echo "Please check the secret value in GitHub Settings"
           fi
 
       - name: Update Dependency Check Database
