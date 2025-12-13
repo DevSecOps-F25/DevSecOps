@@ -246,7 +246,7 @@ EOF
 
   security-checks:
     runs-on: ubuntu-latest
-    needs: [sonarqube, sca-analysis]
+    needs: [sonarqube, sca-analysis, dependabot-check]
     steps:
       - name: Security Scan Summary
         run: |
@@ -255,5 +255,5 @@ EOF
           echo "📁 Available reports:"
           echo "   - SonarQube (SAST) results: Check SonarCloud dashboard"
           echo "   - Trivy (SCA) reports: Download 'sca-reports' artifact"
-          echo "   - Dependabot alerts: Check GitHub Security → Dependabot"
+          echo "   - Dependabot (SCA) alerts: https://github.com/${{ github.repository }}/security/dependabot"
           echo "========================================"
