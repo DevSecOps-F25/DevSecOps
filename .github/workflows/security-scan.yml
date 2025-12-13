@@ -30,11 +30,22 @@ jobs:
 
       - name: Cache Dependency Check Database
         uses: actions/cache@v3
+        id: cache-db
         with:
           path: ~/.dependency-check/data
-          key: dependency-check-db-${{ runner.os }}-v2
+          key: dependency-check-db-${{ runner.os }}-v3
           restore-keys: |
             dependency-check-db-${{ runner.os }}-
+        
+      - name: Check Cache Status
+        run: |
+          if [ "${{ steps.cache-db.outputs.cache-hit }}" = "true" ]; then
+            echo "✅ Database cache hit - using cached database"
+            DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
+            echo "Cached database has $DB_FILES files"
+          else
+            echo "⚠️ Database cache miss - will need to update database"
+          fi
 
       - name: Install OWASP Dependency Check
         run: |
@@ -90,7 +101,7 @@ jobs:
 
       - name: Update Dependency Check Database
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 60
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
@@ -100,45 +111,57 @@ jobs:
           # Create data directory
           mkdir -p ~/.dependency-check/data
           
-          # Try multiple methods to update database
-          UPDATE_SUCCESS=false
-          
-          # Method 1: Try with API key using config file
-          if [ -n "$NVD_API_KEY" ]; then
-            echo "Method 1: Updating with API key (from config file)..."
-            if ./dependency-check/dependency-check/bin/dependency-check.sh \
-              --updateonly \
-              --nvdApiDelay 60000 \
-              --nvdMaxRetryCount 5 2>&1 | tee /tmp/dc-update.log; then
-              UPDATE_SUCCESS=true
-            else
-              echo "Method 1 failed, trying Method 2..."
-              
-              # Method 2: Try with API key as parameter
-              echo "Method 2: Updating with API key (as parameter)..."
+          # Check if we have cached database
+          CACHED_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
+          if [ "$CACHED_FILES" -gt 50 ]; then
+            echo "✅ Using cached database ($CACHED_FILES files)"
+            echo "Skipping update, will only update if needed during scan"
+            UPDATE_SUCCESS=true
+          else
+            echo "⚠️ No cached database found ($CACHED_FILES files)"
+            echo "Will attempt to update database..."
+            
+            # Try multiple methods to update database
+            UPDATE_SUCCESS=false
+            
+            # Method 1: Try with API key using config file
+            if [ -n "$NVD_API_KEY" ]; then
+              echo "Method 1: Updating with API key (from config file)..."
               if ./dependency-check/dependency-check/bin/dependency-check.sh \
                 --updateonly \
-                --nvdApiKey "$NVD_API_KEY" \
                 --nvdApiDelay 60000 \
                 --nvdMaxRetryCount 5 2>&1 | tee /tmp/dc-update.log; then
                 UPDATE_SUCCESS=true
               else
-                echo "Method 2 failed, trying Method 3..."
-                UPDATE_SUCCESS=false
+                echo "Method 1 failed, trying Method 2..."
+                
+                # Method 2: Try with API key as parameter
+                echo "Method 2: Updating with API key (as parameter)..."
+                if ./dependency-check/dependency-check/bin/dependency-check.sh \
+                  --updateonly \
+                  --nvdApiKey "$NVD_API_KEY" \
+                  --nvdApiDelay 60000 \
+                  --nvdMaxRetryCount 5 2>&1 | tee /tmp/dc-update.log; then
+                  UPDATE_SUCCESS=true
+                else
+                  echo "Method 2 failed, trying Method 3..."
+                  UPDATE_SUCCESS=false
+                fi
               fi
             fi
-          fi
-          
-          # Method 3: Try without API key (very slow, but may work)
-          if [ "$UPDATE_SUCCESS" != "true" ]; then
-            echo "Method 3: Updating without API key (this will be VERY slow, 30+ minutes)..."
-            echo "NVD rate limits: 5 requests per 30 seconds without API key"
-            if timeout 2400 ./dependency-check/dependency-check/bin/dependency-check.sh \
-              --updateonly 2>&1 | tee /tmp/dc-update.log; then
-              UPDATE_SUCCESS=true
-            else
-              echo "Method 3 also failed"
-              UPDATE_SUCCESS=false
+            
+            # Method 3: Try without API key (very slow, but may work)
+            if [ "$UPDATE_SUCCESS" != "true" ]; then
+              echo "Method 3: Updating without API key (this will be VERY slow, 30+ minutes)..."
+              echo "NVD rate limits: 5 requests per 30 seconds without API key"
+              echo "This method uses JSON feeds instead of API, which may work better"
+              if timeout 2400 ./dependency-check/dependency-check/bin/dependency-check.sh \
+                --updateonly 2>&1 | tee /tmp/dc-update.log; then
+                UPDATE_SUCCESS=true
+              else
+                echo "Method 3 also failed"
+                UPDATE_SUCCESS=false
+              fi
             fi
           fi
           
@@ -176,6 +199,12 @@ jobs:
             echo ""
             echo "Attempting alternative: Using scan with automatic update (may work during scan)..."
             echo "This will be attempted during the scan phase"
+            echo ""
+            echo "Note: If this continues to fail, the issue is with NVD API access from GitHub Actions"
+            echo "This is a known limitation and may require:"
+            echo "  1. Using Dependency Check 10.0.0+ (already attempted)"
+            echo "  2. Waiting for NVD API to become available"
+            echo "  3. Using a pre-populated database from cache (will be available on next run)"
           fi
 
       - name: Run Dependency Check (SCA)
