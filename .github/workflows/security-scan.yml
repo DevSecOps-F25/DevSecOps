@@ -49,8 +49,12 @@ jobs:
           echo "⚙️ Configuring Dependency Check to use JSON feeds only (no API)"
           mkdir -p ~/.dependency-check
           # Отключаем использование NVD API, заставляем использовать только JSON feeds
-          echo "data.nvd.validForHours=0" > ~/.dependency-check/dependency-check.properties
+          # data.nvd.validForHours=0 заставляет использовать JSON feeds вместо API
+          cat > ~/.dependency-check/dependency-check.properties << 'PROPEOF'
+data.nvd.validForHours=0
+PROPEOF
           echo "✅ Configuration saved: will use JSON feeds instead of API"
+          cat ~/.dependency-check/dependency-check.properties
 
       - name: Update Dependency Check Database
         continue-on-error: true
@@ -71,7 +75,10 @@ jobs:
             echo "This will take 30-60 minutes on first run..."
             
             # Обновление БЕЗ API - использует только JSON feeds
-            ./dependency-check/dependency-check/bin/dependency-check.sh --updateonly || {
+            # --nvdValidForHours 0 заставляет использовать JSON feeds вместо API
+            ./dependency-check/dependency-check/bin/dependency-check.sh \
+              --updateonly \
+              --nvdValidForHours 0 || {
               echo "⚠️ Database update had errors, but will continue with scan"
             }
             
@@ -102,6 +109,12 @@ jobs:
           fi
           
           # Запускаем сканирование
+          # Если база пустая, используем --nvdValidForHours 0 для JSON feeds
+          if [ "$DB_FILES" -le 50 ]; then
+            echo "Using --nvdValidForHours 0 to force JSON feeds during scan"
+            NOUPDATE_FLAG="--nvdValidForHours 0"
+          fi
+          
           ./dependency-check/dependency-check/bin/dependency-check.sh \
             --project "DVWA" \
             --scan ./app \
