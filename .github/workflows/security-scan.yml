@@ -22,13 +22,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Install OWASP Dependency Check
         run: |
-          # Try latest version first (10.0.0), fallback to 9.0.9 if not available
+          # Download and install Dependency Check
           wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.0/dependency-check-10.0.0-release.zip || \
           wget https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip
           unzip dependency-check-*-release.zip -d dependency-check
           chmod +x dependency-check/dependency-check/bin/dependency-check.sh
+          
+          # Check version
+          ./dependency-check/dependency-check/bin/dependency-check.sh --version
 
       - name: Debug - Check API Key
         env:
@@ -71,44 +80,74 @@ jobs:
 
       - name: Update Dependency Check Database
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
+          echo "Attempting to update Dependency Check database..."
+          echo "This may take 20-40 minutes on first run..."
+          
+          # Create data directory
+          mkdir -p ~/.dependency-check/data
+          
+          # Try multiple methods to update database
+          UPDATE_SUCCESS=false
+          
+          # Method 1: Try with API key using config file
           if [ -n "$NVD_API_KEY" ]; then
-            echo "Attempting database update with API key..."
-            # Try with config file first
+            echo "Method 1: Updating with API key (from config file)..."
             ./dependency-check/dependency-check/bin/dependency-check.sh \
               --updateonly \
-              --nvdApiDelay 30000 \
-              --nvdMaxRetryCount 2 || {
-                echo "Update with config file failed, trying with --nvdApiKey parameter"
+              --nvdApiDelay 60000 \
+              --nvdMaxRetryCount 5 || {
+                echo "Method 1 failed, trying Method 2..."
+                
+                # Method 2: Try with API key as parameter
+                echo "Method 2: Updating with API key (as parameter)..."
                 ./dependency-check/dependency-check/bin/dependency-check.sh \
                   --updateonly \
                   --nvdApiKey "$NVD_API_KEY" \
-                  --nvdApiDelay 30000 \
-                  --nvdMaxRetryCount 2 || {
-                    echo "⚠️ Database update with API key failed"
-                    echo "This is a known issue with Dependency Check 9.0.9 and NVD API"
-                    echo "Trying update without API key (will be slow but may work)..."
-                    # Try without API key as last resort (very slow, but may work)
-                    timeout 600 ./dependency-check/dependency-check/bin/dependency-check.sh \
-                      --updateonly || echo "Update without API key also failed"
-                  }
-              }
-          else
-            echo "Warning: NVD_API_KEY not available"
-            echo "Attempting update without API key (will be very slow)..."
-            timeout 600 ./dependency-check/dependency-check/bin/dependency-check.sh \
-              --updateonly || echo "Update without API key failed"
+                  --nvdApiDelay 60000 \
+                  --nvdMaxRetryCount 5 || {
+                    echo "Method 2 failed, trying Method 3..."
+                    UPDATE_SUCCESS=false
+                  } && UPDATE_SUCCESS=true
+              } && UPDATE_SUCCESS=true
           fi
           
-          # Check if database was created
+          # Method 3: Try without API key (very slow, but may work)
+          if [ "$UPDATE_SUCCESS" = false ]; then
+            echo "Method 3: Updating without API key (this will be VERY slow, 30+ minutes)..."
+            echo "NVD rate limits: 5 requests per 30 seconds without API key"
+            timeout 2400 ./dependency-check/dependency-check/bin/dependency-check.sh \
+              --updateonly && UPDATE_SUCCESS=true || {
+                echo "Method 3 also failed"
+                UPDATE_SUCCESS=false
+              }
+          fi
+          
+          # Check if database was created/updated
           if [ -d ~/.dependency-check/data ]; then
-            echo "✅ Database directory exists"
-            ls -lh ~/.dependency-check/data/ | head -5
+            DB_SIZE=$(du -sh ~/.dependency-check/data 2>/dev/null | cut -f1)
+            FILE_COUNT=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
+            echo "Database directory exists"
+            echo "Database size: $DB_SIZE"
+            echo "Number of files: $FILE_COUNT"
+            
+            if [ "$FILE_COUNT" -gt 0 ]; then
+              echo "✅ Database appears to have data"
+              ls -lh ~/.dependency-check/data/ | head -10
+            else
+              echo "⚠️ Database directory exists but appears empty"
+            fi
           else
-            echo "⚠️ Database directory does not exist"
+            echo "❌ Database directory does not exist"
+          fi
+          
+          if [ "$UPDATE_SUCCESS" = true ]; then
+            echo "✅ Database update completed successfully"
+          else
+            echo "⚠️ Database update failed - scan may still work with existing data"
           fi
 
       - name: Run Dependency Check (SCA)
@@ -120,58 +159,89 @@ jobs:
           
           echo "Starting Dependency Check scan..."
           
-          # Check if database exists
-          if [ -d ~/.dependency-check/data ] && [ "$(ls -A ~/.dependency-check/data 2>/dev/null)" ]; then
-            echo "✅ Database exists, using --noupdate"
+          # Check if database exists and has data
+          DB_FILE_COUNT=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
+          if [ -d ~/.dependency-check/data ] && [ "$DB_FILE_COUNT" -gt 10 ]; then
+            echo "✅ Database exists with data ($DB_FILE_COUNT files), using --noupdate"
             USE_NOUPDATE="--noupdate"
           else
-            echo "⚠️ Database does not exist or is empty"
-            echo "This is expected on first run due to NVD API issues with Dependency Check 9.0.9"
-            echo "Attempting scan anyway (may fail, but will demonstrate tool setup)..."
-            USE_NOUPDATE="--noupdate"
+            echo "⚠️ Database is empty or doesn't exist ($DB_FILE_COUNT files found)"
+            echo "Attempting scan without --noupdate (will try to update during scan if possible)..."
+            USE_NOUPDATE=""
           fi
+          
+          # Run scan with multiple fallback attempts
+          SCAN_SUCCESS=false
           
           if [ -n "$NVD_API_KEY" ]; then
             echo "Running scan with API key..."
-            ./dependency-check/dependency-check/bin/dependency-check.sh \
-              --project "DVWA" \
-              --scan ./app \
-              --format JSON \
-              --format HTML \
-              --out ./reports \
-              --nvdApiKey "$NVD_API_KEY" \
-              $USE_NOUPDATE \
-              --enableExperimental \
-              --failOnCVSS 11 || {
-                echo "Scan with API key failed, trying without API key"
-                ./dependency-check/dependency-check/bin/dependency-check.sh \
-                  --project "DVWA" \
-                  --scan ./app \
-                  --format JSON \
-                  --format HTML \
-                  --out ./reports \
-                  $USE_NOUPDATE \
-                  --enableExperimental \
-                  --failOnCVSS 11 || {
-                    echo "⚠️ Scan failed - this is expected if database is empty"
-                    echo "Tool is configured correctly, but requires database update to work"
-                    echo "This is a known limitation with Dependency Check 9.0.9 and NVD API"
-                  }
-              }
+            if [ -n "$USE_NOUPDATE" ]; then
+              # Try with --noupdate first
+              ./dependency-check/dependency-check/bin/dependency-check.sh \
+                --project "DVWA" \
+                --scan ./app \
+                --format JSON \
+                --format HTML \
+                --out ./reports \
+                --nvdApiKey "$NVD_API_KEY" \
+                --noupdate \
+                --enableExperimental \
+                --failOnCVSS 11 && SCAN_SUCCESS=true || {
+                  echo "Scan with --noupdate failed, trying without it (will attempt update)..."
+                  timeout 1800 ./dependency-check/dependency-check/bin/dependency-check.sh \
+                    --project "DVWA" \
+                    --scan ./app \
+                    --format JSON \
+                    --format HTML \
+                    --out ./reports \
+                    --nvdApiKey "$NVD_API_KEY" \
+                    --nvdApiDelay 60000 \
+                    --enableExperimental \
+                    --failOnCVSS 11 && SCAN_SUCCESS=true || echo "All scan attempts failed"
+                }
+            else
+              # Try without --noupdate (will attempt to update)
+              echo "Attempting scan with database update (this may take 20-30 minutes)..."
+              timeout 1800 ./dependency-check/dependency-check/bin/dependency-check.sh \
+                --project "DVWA" \
+                --scan ./app \
+                --format JSON \
+                --format HTML \
+                --out ./reports \
+                --nvdApiKey "$NVD_API_KEY" \
+                --nvdApiDelay 60000 \
+                --enableExperimental \
+                --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
+            fi
           else
             echo "Running scan without API key..."
-            ./dependency-check/dependency-check/bin/dependency-check.sh \
-              --project "DVWA" \
-              --scan ./app \
-              --format JSON \
-              --format HTML \
-              --out ./reports \
-              $USE_NOUPDATE \
-              --enableExperimental \
-              --failOnCVSS 11 || {
-                echo "⚠️ Scan failed - this is expected if database is empty"
-                echo "Tool is configured correctly, but requires database update to work"
-              }
+            if [ -n "$USE_NOUPDATE" ]; then
+              ./dependency-check/dependency-check/bin/dependency-check.sh \
+                --project "DVWA" \
+                --scan ./app \
+                --format JSON \
+                --format HTML \
+                --out ./reports \
+                --noupdate \
+                --enableExperimental \
+                --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
+            else
+              echo "Attempting scan with database update (this will be VERY slow without API key)..."
+              timeout 3600 ./dependency-check/dependency-check/bin/dependency-check.sh \
+                --project "DVWA" \
+                --scan ./app \
+                --format JSON \
+                --format HTML \
+                --out ./reports \
+                --enableExperimental \
+                --failOnCVSS 11 && SCAN_SUCCESS=true || echo "Scan failed"
+            fi
+          fi
+          
+          if [ "$SCAN_SUCCESS" = true ]; then
+            echo "✅ Scan completed successfully!"
+          else
+            echo "⚠️ Scan did not complete successfully"
           fi
           
           # Check if reports were generated
