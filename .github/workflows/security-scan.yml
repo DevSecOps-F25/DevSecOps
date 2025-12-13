@@ -44,6 +44,12 @@ jobs:
           echo "🔄 Updating Dependency Check database (separate step)..."
           mkdir -p ~/.dependency-check/data
           
+          # Удаляем файлы блокировки, если они есть
+          echo "🧹 Cleaning up any lock files..."
+          find ~/.dependency-check/data -name "*.lock" -delete 2>/dev/null || true
+          find ~/.dependency-check/data -name "*.lck" -delete 2>/dev/null || true
+          find ~/.dependency-check/data -name "*.lock.db" -delete 2>/dev/null || true
+          
           DB_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
           
           if [ "$DB_FILES" -gt 50 ]; then
@@ -52,15 +58,26 @@ jobs:
             echo "⚠️ No database found ($DB_FILES files)"
             echo "Updating database using JSON feeds (this will take 30-60 minutes)..."
             
-            # Обновляем базу данных отдельным контейнером
+            # Используем временную директорию для базы данных, чтобы избежать блокировок
+            TEMP_DB_DIR=$(mktemp -d)
+            echo "Using temporary database directory: $TEMP_DB_DIR"
+            
+            # Обновляем базу данных в временной директории
             docker run --rm \
-              -v "$HOME/.dependency-check/data:/data" \
+              -v "$TEMP_DB_DIR:/data" \
               -v "$HOME/.dependency-check/dependency-check.properties:/usr/share/dependency-check/conf/dependency-check.properties:ro" \
               owasp/dependency-check:latest \
               --updateonly \
               --data /data || {
                 echo "⚠️ Database update had errors, but will continue"
               }
+            
+            # Копируем обновленную базу данных в постоянную директорию
+            if [ -d "$TEMP_DB_DIR" ] && [ "$(ls -A $TEMP_DB_DIR 2>/dev/null)" ]; then
+              echo "Copying updated database to permanent location..."
+              cp -r "$TEMP_DB_DIR"/* ~/.dependency-check/data/ 2>/dev/null || true
+              rm -rf "$TEMP_DB_DIR"
+            fi
             
             # Проверяем результат
             NEW_FILES=$(find ~/.dependency-check/data -type f 2>/dev/null | wc -l)
