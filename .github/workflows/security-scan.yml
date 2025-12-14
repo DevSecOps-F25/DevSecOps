@@ -241,16 +241,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download Trivy reports
+        uses: actions/download-artifact@v4
+        with:
+          name: sca-reports
+          path: reports/sca-reports
+      
+      - name: Download Dependency-Check reports
+        uses: actions/download-artifact@v4
+        with:
+          name: security-reports
+          path: reports/security-reports
+
+
       - name: Debug downloaded artifacts
         run: |
           echo "=== reports tree ==="
           find reports -type f
-
-      
-      - name: Download scan reports
-        uses: actions/download-artifact@v4
-        with:
-          path: reports
   
       - name: Upload Trivy report to DefectDojo
         continue-on-error: true
