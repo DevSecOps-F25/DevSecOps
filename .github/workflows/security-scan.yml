@@ -1,10 +1,21 @@
 name: Security Scan
 
-on: [push, pull_request]
+on: 
+  push:
+  pull_request:
+    # Исключаем PR от Dependabot для обновления GitHub Actions
+    # чтобы не запускать SonarQube на ветках с обновлениями workflow
+    types: [opened, synchronize, reopened]
 
 jobs:
   sonarqube:
     runs-on: ubuntu-latest
+    # Пропускаем SonarQube для PR от Dependabot, которые обновляют workflow файлы
+    # (Dependabot отвечает только за SCA - зависимости проекта, не за SAST инструменты)
+    if: |
+      github.event_name != 'pull_request' || 
+      !contains(github.head_ref, 'dependabot') ||
+      !contains(github.event.pull_request.title, '.github/workflows')
     steps:
       - uses: actions/checkout@v4
         with:
