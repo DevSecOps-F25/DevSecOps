@@ -45,24 +45,7 @@ jobs:
           if [ -f "reports/trivy-report.json" ]; then
             echo "✅ Trivy JSON report generated: $(ls -lh reports/trivy-report.json)"
             # Парсим JSON для вывода статистики
-            python3 << 'EOF'
-import json
-try:
-    with open('reports/trivy-report.json', 'r') as f:
-        data = json.load(f)
-    results = data.get('Results', [])
-    total_vulns = 0
-    for result in results:
-        vulns = result.get('Vulnerabilities', [])
-        total_vulns += len(vulns)
-        if vulns:
-            print(f"\nFound in {result.get('Target', 'Unknown')}:")
-            for v in vulns[:5]:  # Первые 5 уязвимостей
-                print(f"  - {v.get('VulnerabilityID', 'Unknown')}: {v.get('Title', 'No title')[:80]}")
-    print(f"\n✅ Total vulnerabilities found: {total_vulns}")
-except Exception as e:
-    print(f"Error reading report: {e}")
-EOF
+            python3 -c "import json; f=open('reports/trivy-report.json'); d=json.load(f); r=d.get('Results',[]); t=sum(len(res.get('Vulnerabilities',[])) for res in r); print(f'Total vulnerabilities found: {t}'); [print(f\"Found in {res.get('Target','Unknown')}: {len(res.get('Vulnerabilities',[]))} vulns\") for res in r if res.get('Vulnerabilities')]"
           else
             echo "❌ Trivy report not found"
           fi
