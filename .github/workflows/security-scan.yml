@@ -37,7 +37,6 @@ jobs:
           scan-ref: './app'
           format: 'json'
           output: 'reports/trivy-report.json'
-          severity: 'CRITICAL,HIGH,MEDIUM'
           exit-code: '0'
 
       - name: Generate Trivy Report (Table Format)
