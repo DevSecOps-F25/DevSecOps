@@ -261,6 +261,7 @@ jobs:
             -F "scan_type=Trivy Scan" \
             -F "file=@reports/sca-reports/trivy-report.json" \
             -F "product_name=DVWA" \
+            -F "engagement_name=CI Scan" \
             -F "auto_create_context=true" \
             -F "close_old_findings=false"
 
