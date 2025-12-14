@@ -240,33 +240,32 @@ jobs:
     needs: [sca-analysis, dependency-check]
     steps:
       - uses: actions/checkout@v4
-
+  
       - name: Download scan reports
         uses: actions/download-artifact@v4
         with:
           path: reports
-
+  
       - name: Upload Trivy report to DefectDojo
-        if: hashFiles('reports/**/trivy-report.json') != ''
+        continue-on-error: true
         run: |
           curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
             -H "Authorization: Token ${{ secrets.DEFECTDOJO_API_KEY }}" \
             -F "scan_type=Trivy Scan" \
-            -F "file=@reports/**/trivy-report.json" \
-            -F "engagement=1" \
+            -F "file=@reports/sca-reports/trivy-report.json" \
             -F "product_name=DVWA" \
             -F "auto_create_context=true" \
             -F "close_old_findings=false"
-
+  
       - name: Upload Dependency-Check report to DefectDojo
-        if: hashFiles('reports/**/dependency-check-report.json') != ''
+        continue-on-error: true
         run: |
           curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
             -H "Authorization: Token ${{ secrets.DEFECTDOJO_API_KEY }}" \
             -F "scan_type=Dependency Check Scan" \
-            -F "file=@reports/**/dependency-check-report.json" \
-            -F "engagement=1" \
+            -F "file=@reports/security-reports/dependency-check-report.json" \
             -F "product_name=DVWA" \
             -F "auto_create_context=true" \
             -F "close_old_findings=false"
+
 
